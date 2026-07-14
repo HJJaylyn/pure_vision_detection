@@ -1,0 +1,20 @@
+# Ignore everything at the repository root by default.
+/*
+
+# Track this ignore file and the active bin-number recognition work.
+!.gitignore
+!/bin_number_recog/
+
+# Common local/cache files.
+.DS_Store
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
