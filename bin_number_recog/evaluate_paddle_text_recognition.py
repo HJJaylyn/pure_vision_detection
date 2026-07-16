@@ -59,7 +59,7 @@ def iter_images(dataset_dir: Path):
             yield label_dir.name, path
 
 
-def best_panel(path: Path, image, expected: str, min_blur: float, min_label_quality: float):
+def best_panel(path: Path, image, expected: str | None, min_blur: float, min_label_quality: float):
     preprocessed = preprocess_label_image(
         path,
         image,
@@ -71,15 +71,16 @@ def best_panel(path: Path, image, expected: str, min_blur: float, min_label_qual
 
     best = None
     best_payload = None
+    digit_count = len(expected) if expected else None
     for rotation in (0, 90, 180, 270):
         oriented = rotate_warp(preprocessed["warped"], rotation)
         search_roi, _ = crop_bin_roi_from_warp(oriented, WIDE_DIGIT_ROI_RATIOS)
-        panel, box, found = find_black_digit_panel(search_roi, digit_count=len(expected))
+        panel, box, found = find_black_digit_panel(search_roi, digit_count=digit_count)
         if not found:
             continue
 
         quality_code = assess_digit_panel_quality(panel)
-        score = panel_selection_score(panel, len(expected))
+        score = panel_selection_score(panel, digit_count)
         if quality_code is not None:
             # Prefer a low-quality true panel over a clean wrong subject.
             score -= 0.05

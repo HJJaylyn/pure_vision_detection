@@ -50,3 +50,16 @@
 - 上下白边和左右白边分开处理；
 - 槽位/投影裁剪只作用于最终数字字符串区域；
 - PaddleOCR 错误分类与中间结果保存。
+
+单张图片识别
+
+使用最终 PaddleOCR 流程识别单张图片：
+
+```bash
+cd /workspace/huangjie/pure_vision_detection/bin_number_recog
+/workspace/huangjie/miniconda3/envs/vision_recog/bin/python \
+  recognize_single_bin_image.py \
+  /workspace/huangjie/Franka/data/img/right_tcp_20260715_212141_294.jpg
+```
+
+脚本会输出 JSON。成功时 `code=OK`，数字在 `bin_number` 字段；标签定位、黑色方块定位或 OCR 未完成时，会输出对应错误码。若已知数字位数，可增加 `--digit-count 4`，帮助槽位评分，但不是必需参数。

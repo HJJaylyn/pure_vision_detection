@@ -471,12 +471,24 @@ def save_label_preprocess_debug(path, image, expected, code, output_dir):
     return str(out_path)
 
 
-def save_ocr_mismatch_debug(path, image, payload, raw_panel, panel, expected, pred, raw_text, score, output_dir):
+def save_ocr_mismatch_debug(
+    path,
+    image,
+    payload,
+    raw_panel,
+    panel,
+    expected,
+    pred,
+    raw_text,
+    score,
+    output_dir,
+    category="OCR_MISMATCH",
+):
     original = make_original_with_equalized_panel(
         path,
         image,
         expected,
-        "OCR_MISMATCH",
+        category,
         extra_lines=[f"expected={expected}", f"pred={pred or '-'} raw={raw_text or '-'} score={score:.4f}"],
     )
 
@@ -548,7 +560,7 @@ def save_ocr_mismatch_debug(path, image, payload, raw_panel, panel, expected, pr
         panels.append(roi_vis)
     panels.extend([first_vis, trim_vis, refine_vis, ocr_vis])
     debug = compact_vstack(panels)
-    out_path = output_dir / "debug_images" / "OCR_MISMATCH" / f"{safe_name(path)}_ocr_input.png"
+    out_path = output_dir / "debug_images" / category / f"{safe_name(path)}_ocr_input.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), debug)
     return str(out_path)
@@ -599,6 +611,11 @@ def main() -> int:
     )
     parser.add_argument("--min-blur", type=float, default=35.0)
     parser.add_argument("--min-label-quality", type=float, default=0.55)
+    parser.add_argument(
+        "--save-correct-debug",
+        action="store_true",
+        help="Also save the full intermediate debug composite for correctly recognized samples.",
+    )
     args = parser.parse_args()
 
     from paddleocr import TextRecognition
@@ -660,6 +677,20 @@ def main() -> int:
                         raw_text,
                         score,
                         args.output_dir,
+                    )
+                elif args.save_correct_debug:
+                    debug_image = save_ocr_mismatch_debug(
+                        path,
+                        image,
+                        payload,
+                        payload["panel"],
+                        panel,
+                        expected,
+                        pred,
+                        raw_text,
+                        score,
+                        args.output_dir,
+                        category="OCR_CORRECT",
                     )
 
         ok = pred == expected
