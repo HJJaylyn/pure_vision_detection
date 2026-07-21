@@ -125,6 +125,35 @@ def contour_quads(mask: np.ndarray, min_area: float, max_area: float) -> list[np
     return quads
 
 
+def folded_canny_quads(mask: np.ndarray, min_area: float, max_area: float) -> list[np.ndarray]:
+    """Turn a folded thick Canny rectangle into its own rotated quadrilateral.
+
+    A chip border may look closed but trace as a thin non-convex 7/8-point
+    contour: the path follows both sides of the thick edge and has tiny filled
+    area. Its bounding box and long perimeter still describe one individual
+    chip, so fit only that contour's minimum-area quadrilateral. This never
+    pairs lines from separate chip contours.
+    """
+    contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    quads = []
+    for contour in contours:
+        contour_area = float(cv2.contourArea(contour))
+        x, y, width, height = cv2.boundingRect(contour)
+        bbox_area = float(width * height)
+        if not min_area <= bbox_area <= max_area:
+            continue
+        perimeter = float(cv2.arcLength(contour, True))
+        # Normal closed chip contours are handled by contour_quads. Folded
+        # outlines have a disproportionately long path but near-zero area.
+        if contour_area >= min_area or perimeter < 1.30 * 2.0 * (width + height):
+            continue
+        quad = order_points(cv2.boxPoints(cv2.minAreaRect(contour)))
+        quad_area, ratio = quad_geometry(quad)
+        if min_area <= quad_area <= max_area and 0.75 <= ratio <= 3.20:
+            quads.append(quad)
+    return quads
+
+
 def quad_geometry(quad: np.ndarray) -> tuple[float, float]:
     tl, tr, br, bl = quad
     width = 0.5 * (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl))
@@ -133,11 +162,17 @@ def quad_geometry(quad: np.ndarray) -> tuple[float, float]:
     return float(width * height), float(ratio)
 
 
-def warp_quad(image: np.ndarray, quad: np.ndarray, output_size: tuple[int, int]) -> np.ndarray:
+def warp_quad(
+    image: np.ndarray,
+    quad: np.ndarray,
+    output_size: tuple[int, int],
+    *,
+    interpolation: int = cv2.INTER_LINEAR,
+) -> np.ndarray:
     width, height = output_size
     dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype=np.float32)
     matrix = cv2.getPerspectiveTransform(quad.astype(np.float32), dst)
-    return cv2.warpPerspective(image, matrix, output_size)
+    return cv2.warpPerspective(image, matrix, output_size, flags=interpolation)
 
 
 def expand_quad(quad: np.ndarray, image_shape: tuple[int, ...], margin: float) -> np.ndarray:
@@ -813,13 +848,12 @@ def chip_surface_mask(image: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     otsu_threshold, _ = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # A reflected chip can be materially brighter than the black tray while
-    # still falling below the global Otsu split.  Relax the split a little,
-    # then let geometry and the black surround reject unrelated regions.
-    # The tray itself is genuinely close to black.  Let locally darker silver
-    # surfaces enter as weak evidence, then use their black enclosure and
-    # rectangular Canny boundary to reject tray/background regions.
-    _, bright = cv2.threshold(blurred, max(1, int(otsu_threshold * 0.72)), 255, cv2.THRESH_BINARY)
+    # A dim chip can be much darker than the white background and still be
+    # clearly brighter than its black slot. Otsu is biased upward by a small
+    # bright reflection, which split the dark portions of real chips in the
+    # white-background data. Keep these as weak candidates; geometry and the
+    # black surround remain the acceptance evidence below.
+    _, bright = cv2.threshold(blurred, max(18, int(otsu_threshold * 0.45)), 255, cv2.THRESH_BINARY)
     bright = cv2.morphologyEx(bright, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
     return cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8), iterations=1)
 
@@ -858,7 +892,10 @@ def quad_mask_coverage(mask: np.ndarray, quad: np.ndarray) -> float:
     return float((mask[pixels] > 0).mean()) if np.any(pixels) else 0.0
 
 
-def find_chip_quads(rectified_waffle: np.ndarray) -> tuple[list[QuadCandidate], dict[str, np.ndarray]]:
+def find_chip_quads(
+    rectified_waffle: np.ndarray,
+    source_canny: np.ndarray | None = None,
+) -> tuple[list[QuadCandidate], dict[str, np.ndarray]]:
     """Find all silver chip quadrilaterals directly, without fixed grid cells.
 
     The waffle layout can be used by a future consistency check, but it must
@@ -866,6 +903,11 @@ def find_chip_quads(rectified_waffle: np.ndarray) -> tuple[list[QuadCandidate], 
     make that assumption unsafe.
     """
     raw_edges, candidate_mask = edge_masks(rectified_waffle)
+    if source_canny is not None:
+        # The tray is often only a few camera pixels wide. Resampling RGB
+        # before Canny can blur a crisp chip border into fragments, so retain
+        # the original-image edge evidence in the rectified coordinate frame.
+        raw_edges = cv2.bitwise_or(raw_edges, source_canny)
     bright_surfaces = chip_surface_mask(rectified_waffle)
     # Keep Canny independent from the dark-material helper.  A small close
     # reconnects broken chip borders, while preserving the individual
@@ -884,6 +926,9 @@ def find_chip_quads(rectified_waffle: np.ndarray) -> tuple[list[QuadCandidate], 
     # the rectified waffle image.
     max_area = height * width * 0.25
     raw_quads = contour_quads(chip_canny_candidates, min_area, max_area)
+    # Keep a Canny-first fallback for thick folded outlines. Unlike global
+    # Hough pairing, each candidate is derived from one local chip contour.
+    raw_quads.extend(folded_canny_quads(chip_canny_candidates, min_area, max_area))
     raw_quads.extend(contour_quads(candidate_mask, min_area, max_area))
     raw_quads.extend(contour_quads(bright_surfaces, min_area, max_area))
     raw_quads.extend(min_area_quads(bright_surfaces, min_area, max_area))
@@ -980,6 +1025,12 @@ def analyze_image(path: Path, occupancy_threshold: float) -> tuple[dict, dict[st
     # detector sees it.
     crop_quad = expand_quad(waffle.quad, image.shape, WAFFLE_CROP_MARGIN)
     rectified = warp_quad(image, crop_quad, WARP_SIZE)
+    rectified_source_canny = warp_quad(
+        waffle_stages["canny"],
+        crop_quad,
+        WARP_SIZE,
+        interpolation=cv2.INTER_NEAREST,
+    )
     original_annotated = image.copy()
     cv2.polylines(original_annotated, [waffle.quad.astype(np.int32).reshape(-1, 1, 2)], True, (0, 255, 0), 3)
     cv2.polylines(original_annotated, [crop_quad.astype(np.int32).reshape(-1, 1, 2)], True, (0, 220, 255), 2)
@@ -995,7 +1046,7 @@ def analyze_image(path: Path, occupancy_threshold: float) -> tuple[dict, dict[st
     )
     chips_debug = rectified.copy()
     detections = []
-    candidates, chip_stages = find_chip_quads(rectified)
+    candidates, chip_stages = find_chip_quads(rectified, rectified_source_canny)
     for index, chip in enumerate(candidates):
         occupied = chip.score >= occupancy_threshold
         color = (40, 210, 40) if occupied else (0, 80, 235)

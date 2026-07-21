@@ -15,10 +15,20 @@ table shadow alone cannot select a tray.
    and coverage of a continuous tray-sized black component. This prevents a
    strong internal chip divider from being selected as the tray boundary.
 4. Expand the selected quadrilateral slightly and perspective-rectify it.
-5. Independently generate chip candidates from rectified Canny rectangles and
-   a relaxed bright-surface mask. Brightness is corroborating evidence, not a
-   hard requirement, because silver chips can reflect dark surroundings.
-6. Reject a final chip quadrilateral larger than `25%` of the rectified image.
+5. Preserve the original-image Canny map by perspective-warping it into the
+   rectified tray alongside a fresh local Canny pass. This avoids losing a
+   real chip border merely because RGB interpolation softened a small source
+   image during rectification.
+6. Generate chip candidates primarily from rectified Canny contours. Normal
+   closed convex four-sided contours are used directly. If one *local* thick
+   Canny outline folds into a non-convex 7/8-point path with tiny contour area,
+   its own minimum-area quadrilateral is used as a fallback. This handles a
+   visually clear chip outline without combining lines from separate chips.
+7. Use a relaxed bright-surface mask only as corroborating evidence. Brightness
+   is not a hard requirement because silver chips can reflect dark surroundings
+   or be much darker than the white background while remaining brighter than
+   the surrounding black slot.
+8. Reject a final chip quadrilateral larger than `25%` of the rectified image.
    Remove overlapping candidates using true quadrilateral overlap; one physical
    chip cannot occupy multiple candidates.
 
@@ -54,6 +64,24 @@ selected tray quadrilateral and yellow safe crop margin. It also includes the
 rectified Canny chip candidates and bright-surface candidates. Green chip
 quadrilaterals are accepted; orange quadrilaterals are rejected by the
 occupancy score.
+
+## White Background Dataset
+
+The current validated white-background dataset command is:
+
+```bash
+source /workspace/huangjie/miniconda3/bin/activate vision_recog
+cd /workspace/huangjie/pure_vision_detection
+python chip_count_recog/detect_chip_count.py \
+  --dataset datasets/chip_count_white_bg \
+  --debug-dir datasets/chip_count_debug_white_bg \
+  --csv datasets/chip_count_white_bg_eval.csv
+```
+
+This version deliberately favors clear local Canny chip boundaries over an
+absolute silver/white threshold. It is robust to normal dim reflections, but
+an extremely underexposed image can still lack enough contrast for reliable
+counting. Do not broadly relax the detector solely to fit one such outlier.
 
 ## Franka Reusable Copy
 
