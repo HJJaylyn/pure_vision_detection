@@ -1,9 +1,6 @@
-# Ignore everything at the repository root by default.
-/*
-
-# Track this ignore file and the active bin-number recognition work.
-!.gitignore
-!/bin_number_recog/
+# Ignore local copies and datasets.
+/bin_number_recog copy/
+/datasets/
 
 # Common local/cache files.
 .DS_Store
